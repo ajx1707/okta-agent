@@ -22,14 +22,13 @@ host = os.environ.get("HOST", "0.0.0.0")
 supplier_agent = create_supplier_agent()
 
 # 2. Wrap into A2A ASGI App (exposes GET /.well-known/agent-card.json and POST /)
-app = to_a2a(
+raw_app = to_a2a(
     supplier_agent,
     host=host,
     port=port
 )
 
-# 3. Add health check endpoint
-@app.route("/health", methods=["GET"])
+# 3. Add health check endpoint using Starlette's add_route
 async def health_check(request):
     return JSONResponse({
         "status": "HEALTHY",
@@ -38,8 +37,10 @@ async def health_check(request):
         "protocol": "A2A-1.0"
     })
 
-# 4. Attach Okta JWT Authentication Middleware
-app.add_middleware(OktaAuthMiddleware)
+raw_app.add_route("/health", health_check, methods=["GET"])
+
+# 4. Wrap into Okta JWT Authentication Middleware (ASGI standard)
+app = OktaAuthMiddleware(raw_app)
 
 if __name__ == "__main__":
     print(f"Starting External Supplier A2A Server (Okta-Protected) on {host}:{port}")
