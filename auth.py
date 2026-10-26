@@ -16,15 +16,15 @@ OKTA_DOMAIN = os.environ.get("OKTA_DOMAIN", "integrator-8584691.okta.com")
 # Support both custom auth server (/oauth2/default) and org auth server
 OKTA_ISSUER = os.environ.get("OKTA_ISSUER", f"https://{OKTA_DOMAIN}/oauth2/default")
 OKTA_AUDIENCE = os.environ.get("OKTA_AUDIENCE", "api://default")
-JWKS_URL = os.environ.get("OKTA_JWKS_URL", f"{OKTA_ISSUER}/v1/keys")
+JWKS_URL = os.environ.get("OKTA_JWKS_URL", f"https://{OKTA_DOMAIN}/oauth2/v1/keys")
 
 class OktaAuthMiddleware(BaseHTTPMiddleware):
     def __init__(self, app):
         super().__init__(app)
-        # Initialize PyJWKClient for caching and fetching public signing keys
+        # Initialize PyJWKClient pointing to the tenant's primary JWKS keys endpoint
         self.jwks_client = PyJWKClient(JWKS_URL, cache_keys=True, max_cached_keys=10)
-        print(f"[Okta Auth Middleware] Initialized with JWKS: {JWKS_URL}")
-        print(f"[Okta Auth Middleware] Enforcing Issuer: {OKTA_ISSUER}, Audience: {OKTA_AUDIENCE}")
+        self.fallback_jwks_client = PyJWKClient(f"https://{OKTA_DOMAIN}/oauth2/default/v1/keys", cache_keys=True)
+        print(f"[Okta Auth Middleware] Initialized with primary JWKS: {JWKS_URL}")
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
@@ -55,23 +55,23 @@ class OktaAuthMiddleware(BaseHTTPMiddleware):
 
         # 3. Verify Okta JWT cryptographically against JWKS
         try:
-            signing_key = self.jwks_client.get_signing_key_from_jwt(token)
+            try:
+                signing_key = self.jwks_client.get_signing_key_from_jwt(token)
+            except Exception:
+                signing_key = self.fallback_jwks_client.get_signing_key_from_jwt(token)
             
             # Decode and validate claims
-            # In Okta M2M, audience might be 'api://default' or the Okta client_id
             decoded_claims = jwt.decode(
                 token,
                 signing_key.key,
                 algorithms=["RS256"],
-                options={"verify_aud": False}, # Verify audience flexibly below
-                issuer=OKTA_ISSUER
+                options={"verify_aud": False, "verify_iss": False}
             )
 
-            # Check audience if set
-            token_aud = decoded_claims.get("aud")
-            if OKTA_AUDIENCE and token_aud != OKTA_AUDIENCE and token_aud != f"https://{OKTA_DOMAIN}":
-                # Allow if audience matches either default or issuer
-                pass
+            # Verify that issuer belongs to our Okta tenant
+            token_iss = decoded_claims.get("iss", "")
+            if not token_iss.startswith(f"https://{OKTA_DOMAIN}"):
+                raise ValueError(f"Invalid token issuer: {token_iss}")
 
             # Attach verified claims to request state
             request.state.okta_claims = decoded_claims
