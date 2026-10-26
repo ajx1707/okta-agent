@@ -34,7 +34,7 @@ def reserve_stock_tool(sku: str, quantity: int) -> str:
 def create_supplier_agent() -> Agent:
     return Agent(
         name="external_supplier_specialist",
-        model="gemini-2.5-flash",
+        model="gemini-3.8-flash",
         description=(
             "External Global Logistics & Hardware Supplier Specialist Agent. "
             "Manages partner warehouse stock allocations, B2B reservations, and fulfillment over A2A."
